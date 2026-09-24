@@ -17,7 +17,25 @@ export interface DomainRecord {
   relatedCode: string;
   createdAt: string;
   updatedAt: string;
+  // 印刷批次分批放行字段：计划份数在建批时记录，累计/剩余由后端放行台账实时汇总。
+  plannedCopies?: number;
+  releasedCopies?: number;
+  remainingCopies?: number;
+  releases?: RunReleaseRecord[];
   revisions?: RevisionRecord[];
+}
+
+export interface RunReleaseRecord {
+  id: number;
+  printRunId: number;
+  startSequence: number;
+  endSequence: number;
+  completedCopies: number;
+  pressCode: string;
+  actor: string;
+  requestId: string;
+  reason: string;
+  createdAt: string;
 }
 
 export interface RevisionRecord {

@@ -57,3 +57,43 @@ docker compose config --quiet
 ```bash
 docker compose down -v --remove-orphans
 ```
+
+# 分批印刷放行验收记录
+
+验收日期：2026-09-24（Asia/Shanghai）
+
+## 静态与测试
+
+```bash
+cd backend
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./...
+
+cd ../frontend
+npm run typecheck
+npm run build
+```
+
+以上命令均以退出码 0 完成。新增集成测试 `TestPartialRunReleaseLedger`（`backend/internal/router/router_test.go`），`go test -race -count=8` 连续运行全部通过，覆盖：
+
+- 种子批次 PR-003 计划 6000、台账 2 笔累计 3600、状态保持校样中、剩余 2400，序号区间 1–2000、2001–3600 不重叠。
+- viewer/operator 提交放行均为 403；复核员手动 `proofing -> released` 迁移返回 422（满数只能由台账累计触发）。
+- 印刷机台不存在返回 422 且带可见中文原因；超计划（400+700>1000）返回 422，失败后台账仍只有 1 笔、累计 400 不变。
+- 两人以同一版本同时提交剩余 400 份：恰好一笔 200、一笔 409 `release_conflict`；最终批次 released、累计 1000、剩余 0、台账 2 笔，第二笔区间 401–1000。
+- 满数后再提交返回 422（只有校样中的批次才能登记放行）。
+
+## 运行时 API 冒烟（SQLite 模式）
+
+- 建批返回 `plannedCopies=1000 / releasedCopies=0 / remainingCopies=1000`。
+- 首批 400 份（机台 PU-001）后状态 proofing、剩余 600；超计划失败带本次/累计/计划/剩余数字且累计不变；过期版本返回 409。
+- 并发两笔最终 600 份：200 与 409 各一，失败原因 `同一批次已有放行先一步提交，请刷新后重试`。
+- 审计写入 `RunRelease release copies:400 -> copies:1000` 与满数时的 `PrintRun transition proofing -> released`。
+
+## 前端
+
+- `npm run typecheck` 与 `npm run build` 通过；产物包含「分批印刷放行 / 计划份数 / 累计数量 / 剩余数量 / 本次完成数 / 印刷机台」文案。
+- `/release` 顶部放行看板逐行显示计划、累计、剩余和进度条，校样中批次可内联登记本次完成数与机台；失败原因在行内显示并自动刷新台账；满数批次移入已放行区显示「已满数放行，共 N 笔记录」。
+- `/runs` 列表增加「计划 / 累计 / 剩余」列，校样中批次显示「分批放行」入口，详情弹窗展示互不重叠的放行区间、机台、复核员、请求 ID。
+

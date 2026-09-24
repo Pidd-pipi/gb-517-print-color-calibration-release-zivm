@@ -12,6 +12,7 @@ import (
 type PressUnitRepository interface {
 	List(context.Context, dto.PageQuery) (Page[model.PressUnit], error)
 	Get(context.Context, uint) (model.PressUnit, error)
+	GetByCode(context.Context, string) (model.PressUnit, error)
 	Create(context.Context, *model.PressUnit) error
 	Update(context.Context, uint, uint, *model.PressUnit) error
 	Delete(context.Context, uint) error
@@ -31,6 +32,11 @@ func (r *pressUnitRepository) List(ctx context.Context, q dto.PageQuery) (Page[m
 }
 func (r *pressUnitRepository) Get(ctx context.Context, id uint) (model.PressUnit, error) {
 	return r.store.Get(ctx, id)
+}
+func (r *pressUnitRepository) GetByCode(ctx context.Context, code string) (model.PressUnit, error) {
+	var item model.PressUnit
+	err := r.store.db.WithContext(ctx).Where("code = ?", code).First(&item).Error
+	return item, err
 }
 func (r *pressUnitRepository) Create(ctx context.Context, item *model.PressUnit) error {
 	return r.store.Create(ctx, item)

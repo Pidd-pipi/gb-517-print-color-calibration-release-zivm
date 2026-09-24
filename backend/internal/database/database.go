@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/blueship581/print-color-calibration-release/backend/internal/config"
@@ -25,7 +26,20 @@ func Open(ctx context.Context, cfg config.Config, log *slog.Logger) (*gorm.DB, *
 	case "mysql":
 		dialector = mysql.Open(cfg.DatabaseDSN)
 	case "sqlite":
-		dialector = sqlite.Open(cfg.DatabaseDSN)
+		// busy_timeout queues concurrent partial-release transactions instead of
+		// failing with SQLITE_BUSY; txlock=immediate acquires the write lock at
+		// BEGIN so two release submissions are serialised before either reads
+		// the ledger.
+		dsn := cfg.DatabaseDSN
+		if !strings.Contains(dsn, "_pragma") {
+			if strings.Contains(dsn, "?") {
+				dsn += "&"
+			} else {
+				dsn += "?"
+			}
+			dsn += "_pragma=busy_timeout(5000)&_txlock=immediate"
+		}
+		dialector = sqlite.Open(dsn)
 	default:
 		return nil, nil, fmt.Errorf("unsupported database driver %q", cfg.DatabaseDriver)
 	}
@@ -78,7 +92,7 @@ func migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{}, &model.AuditLog{},
 		&model.PressUnit{},
-		&model.PrintRun{}, &model.PrintRunRevision{},
+		&model.PrintRun{}, &model.PrintRunRevision{}, &model.RunRelease{},
 		&model.ColorProof{},
 		&model.ReleaseDecision{}, &model.ReleaseDecisionRevision{},
 	)
@@ -161,20 +175,20 @@ func seedPrintRun(ctx context.Context, db *gorm.DB) error {
 		{BaseModel: model.BaseModel{Code: "PR-001", Name: "印刷批次示例一", Status: "setup", Version: 1,
 			Description: "用于启动验证和主要流程演示的印刷批次记录"}, Facility: "印刷色彩批次校准放行区域1", Owner: "运行一组",
 			Category: "常规", RiskLevel: "low", MetricValue: 12.5, MetricUnit: "unit",
-			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-01"},
+			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-01", PlannedCopies: 5000},
 
 		{BaseModel: model.BaseModel{Code: "PR-002", Name: "印刷批次示例二", Status: "printing", Version: 1,
 			Description: "用于启动验证和主要流程演示的印刷批次记录"}, Facility: "印刷色彩批次校准放行区域2", Owner: "质量复核组",
 			Category: "重点", RiskLevel: "medium", MetricValue: 25.0, MetricUnit: "%",
-			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-02"},
+			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-02", PlannedCopies: 8000},
 
 		{BaseModel: model.BaseModel{Code: "PR-003", Name: "印刷批次示例三", Status: "proofing", Version: 1,
 			Description: "用于启动验证和主要流程演示的印刷批次记录"}, Facility: "印刷色彩批次校准放行区域3", Owner: "安全主管组",
 			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
-			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-03"},
+			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-03", PlannedCopies: 6000},
 	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Omit("Revisions").Create(&items).Error; err != nil {
+		if err := tx.Omit("Revisions", "Releases").Create(&items).Error; err != nil {
 			return err
 		}
 		revisions := make([]model.PrintRunRevision, 0, len(items))
@@ -183,11 +197,23 @@ func seedPrintRun(ctx context.Context, db *gorm.DB) error {
 				PrintRunID: item.ID, Version: item.Version, Status: item.Status, Name: item.Name,
 				Facility: item.Facility, Owner: item.Owner, Category: item.Category,
 				RiskLevel: item.RiskLevel, MetricValue: item.MetricValue, MetricUnit: item.MetricUnit,
-				Evidence: item.Evidence, RelatedCode: item.RelatedCode,
+				Evidence: item.Evidence, RelatedCode: item.RelatedCode, PlannedCopies: item.PlannedCopies,
 				Actor: "seed", RequestID: "startup-seed", Reason: "initial colour configuration",
 			})
 		}
-		return tx.Create(&revisions).Error
+		if err := tx.Create(&revisions).Error; err != nil {
+			return err
+		}
+		// PR-003 is already partway through its partial-release ledger: 3,600 of
+		// 6,000 copies have passed, so it remains 校样中 with 2,400 remaining.
+		pr003 := items[2]
+		seedReleases := []model.RunRelease{
+			{PrintRunID: pr003.ID, StartSequence: 1, EndSequence: 2000, CompletedCopies: 2000,
+				PressCode: "PU-001", Actor: "reviewer", RequestID: "startup-seed", Reason: "首批放行 2000 份", CreatedAt: now.Add(-2 * time.Hour)},
+			{PrintRunID: pr003.ID, StartSequence: 2001, EndSequence: 3600, CompletedCopies: 1600,
+				PressCode: "PU-002", Actor: "reviewer", RequestID: "startup-seed", Reason: "第二批放行 1600 份", CreatedAt: now.Add(-1 * time.Hour)},
+		}
+		return tx.Create(&seedReleases).Error
 	})
 }
 

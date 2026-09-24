@@ -23,6 +23,7 @@ func (h *PrintRunHandler) Register(group *gin.RouterGroup) {
 	resource.POST("", middleware.RequireMinimumRole("operator"), h.create)
 	resource.PUT("/:id", middleware.RequireMinimumRole("operator"), h.update)
 	resource.POST("/:id/transition", middleware.RequireMinimumRole("operator"), h.transition)
+	resource.POST("/:id/releases", middleware.RequireMinimumRole("reviewer"), submitRunRelease(h.service))
 	resource.DELETE("/:id", middleware.RequireRoles("admin"), h.remove)
 }
 

@@ -39,11 +39,16 @@ docker compose down -v --remove-orphans
 | 印刷批次 | `PrintRun` | `/api/runs` | setup, printing, proofing, hold, released |
 | 色彩校样 | `ColorProof` | `/api/proofs` | captured, review, accepted, rejected |
 | 放行决定 | `ReleaseDecision` | `/api/release` | draft, release, rework, quarantine |
+| 分批放行台账 | `RunRelease` | `/api/runs/:id/releases` | 随批次累计驱动 released |
 
 - JWT 登录和 viewer/operator/reviewer/admin 四级 RBAC。
+- 印刷常分几次完成：批次记录**计划份数**，复核员每次放行只填写**本次完成数**和**印刷机台**；累计数量不得超过计划，序号区间由服务端分配（`released+1 …`）保证互不重叠。
+- 累计未满时批次保持「校样中」并显示剩余数量；累计满数后批次自动转为「已放行」，禁止再放行。`proofing -> released` 不再允许手动点击，整批放行只能由台账累计触发。
+- 同一区间两人同时提交只保留一笔：乐观锁 + 行级申领在同一事务内完成，落败方收到 409 `release_conflict`，事务回滚、累计数量不变。
+- 放行页 `/release` 顶部看板逐行显示计划份数、累计数量、剩余数量和进度；提交失败（超计划、区间重叠、机台不存在）会在对应行显示失败原因，且失败不改变累计数。
 - 所有状态变化使用乐观锁并写入不可覆盖的审计日志。
 - 色彩配置和放行决定在同一数据库事务内追加不可变修订；每个版本保留业务证据、操作者、请求 ID 和原因。
-- 已放行或隔离的决定禁止覆盖式编辑；校样接收/拒绝和批次放行只能由 `reviewer/admin` 完成。
+- 已放行或隔离的决定禁止覆盖式编辑；校样接收/拒绝和批次分批放行只能由 `reviewer/admin` 完成。
 - 请求 ID、结构化日志、全局错误映射和 Redis 分布式限流。
 - 提供脱敏运行配置、当前会话、审计汇总和单实体审计历史接口。
 - 业务工作台支持查询、新建、状态推进、分页、角色切换、色彩读数、版本详情及操作审计查看。
@@ -147,6 +152,22 @@ token=$(curl -sS -X POST http://127.0.0.1:19517/api/auth/login \
 
 curl -sS http://127.0.0.1:19517/api/overview \
   -H "Authorization: Bearer $token"
+```
+
+分批放行（`reviewer/admin`）：
+
+```bash
+# 批次详情中包含 plannedCopies / releasedCopies / remainingCopies 与 releases 台账
+run=$(curl -sS http://127.0.0.1:19517/api/runs/3 -H "Authorization: Bearer $token")
+version=$(printf '%s' "$run" | jq -r '.data.version')
+
+curl -sS -X POST http://127.0.0.1:19517/api/runs/3/releases \
+  -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+  -d "{\"expectedVersion\":$version,\"completedCopies\":2400,\"pressCode\":\"PU-002\",\"reason\":\"夜班补印放行\"}"
+# 未超计划 -> 200，批次仍为 proofing，返回最新累计/剩余
+# 超计划 -> 422 business_rule，消息含本次/累计/计划/剩余数字，台账不变
+# 同区间并发落败 -> 409 release_conflict，只有一笔写入，区间不重叠
+# 累计恰好满数 -> 状态自动转为 released
 ```
 
 ## License
