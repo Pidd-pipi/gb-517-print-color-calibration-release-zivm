@@ -35,7 +35,9 @@ var PressUnitTransitions = map[string]map[string]bool{
 var PrintRunTransitions = map[string]map[string]bool{
 	"setup":    {"printing": true},
 	"printing": {"proofing": true, "hold": true, "setup": true},
-	"proofing": {"hold": true, "released": true, "printing": true},
+	// proofing 不再允许一键直达 released：只有分批放行累计满计划份数时，
+	// 系统才会把批次转为已放行，避免后补印的印刷品混入已放行成品。
+	"proofing": {"hold": true, "printing": true},
 	"hold":     {"proofing": true},
 	"released": {"hold": true},
 }

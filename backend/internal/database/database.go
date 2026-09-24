@@ -78,7 +78,7 @@ func migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{}, &model.AuditLog{},
 		&model.PressUnit{},
-		&model.PrintRun{}, &model.PrintRunRevision{},
+		&model.PrintRun{}, &model.PrintRunRevision{}, &model.RunRelease{},
 		&model.ColorProof{},
 		&model.ReleaseDecision{}, &model.ReleaseDecisionRevision{},
 	)
@@ -161,17 +161,20 @@ func seedPrintRun(ctx context.Context, db *gorm.DB) error {
 		{BaseModel: model.BaseModel{Code: "PR-001", Name: "印刷批次示例一", Status: "setup", Version: 1,
 			Description: "用于启动验证和主要流程演示的印刷批次记录"}, Facility: "印刷色彩批次校准放行区域1", Owner: "运行一组",
 			Category: "常规", RiskLevel: "low", MetricValue: 12.5, MetricUnit: "unit",
-			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-01"},
+			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-01",
+			PlannedQuantity: 500},
 
 		{BaseModel: model.BaseModel{Code: "PR-002", Name: "印刷批次示例二", Status: "printing", Version: 1,
 			Description: "用于启动验证和主要流程演示的印刷批次记录"}, Facility: "印刷色彩批次校准放行区域2", Owner: "质量复核组",
 			Category: "重点", RiskLevel: "medium", MetricValue: 25.0, MetricUnit: "%",
-			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-02"},
+			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-02",
+			PlannedQuantity: 1200},
 
 		{BaseModel: model.BaseModel{Code: "PR-003", Name: "印刷批次示例三", Status: "proofing", Version: 1,
 			Description: "用于启动验证和主要流程演示的印刷批次记录"}, Facility: "印刷色彩批次校准放行区域3", Owner: "安全主管组",
 			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
-			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-03"},
+			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-517-03",
+			PlannedQuantity: 800},
 	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Omit("Revisions").Create(&items).Error; err != nil {
@@ -183,7 +186,7 @@ func seedPrintRun(ctx context.Context, db *gorm.DB) error {
 				PrintRunID: item.ID, Version: item.Version, Status: item.Status, Name: item.Name,
 				Facility: item.Facility, Owner: item.Owner, Category: item.Category,
 				RiskLevel: item.RiskLevel, MetricValue: item.MetricValue, MetricUnit: item.MetricUnit,
-				Evidence: item.Evidence, RelatedCode: item.RelatedCode,
+				Evidence: item.Evidence, RelatedCode: item.RelatedCode, PlannedQuantity: item.PlannedQuantity,
 				Actor: "seed", RequestID: "startup-seed", Reason: "initial colour configuration",
 			})
 		}

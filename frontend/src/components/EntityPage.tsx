@@ -13,6 +13,7 @@ import { EmptyState } from './common/EmptyState';
 import { MetricCard } from './common/MetricCard';
 import { ConfirmDialog } from './common/ConfirmDialog';
 import { UiButton } from './common/UiButton';
+import { RunReleaseDialog } from './RunReleaseDialog';
 
 function decisionRunState(status: string): RunState {
   if (status === 'release') return 'released';
@@ -23,7 +24,8 @@ function decisionRunState(status: string): RunState {
 function nextPermittedStatus(config: EntityConfig, current: string, reviewer: boolean): string | null {
   const transitions: Record<string, Record<string, string | null>> = {
     pressUnit: { ready: 'setup', setup: 'printing', printing: 'maintenance', maintenance: 'printing' },
-    printRun: { setup: 'printing', printing: 'proofing', proofing: reviewer ? 'released' : 'hold', hold: 'proofing', released: reviewer ? 'hold' : null },
+    // 校样中的批次不再一键放行：reviewer 通过分批放行面板登记，满数后系统自动转已放行。
+    printRun: { setup: 'printing', printing: 'proofing', proofing: 'hold', hold: 'proofing', released: reviewer ? 'hold' : null },
     colorProof: { captured: 'review', review: reviewer ? 'accepted' : null, accepted: reviewer ? 'review' : null, rejected: reviewer ? 'review' : null },
     releaseDecision: { draft: reviewer ? 'release' : 'rework', release: reviewer ? 'rework' : null, rework: reviewer ? 'release' : null, quarantine: reviewer ? 'rework' : null },
   };
@@ -38,6 +40,7 @@ export function EntityPage({ config, useStore }: { config: EntityConfig; useStor
   const [showCreate, setShowCreate] = useState(false);
   const [pending, setPending] = useState<{ item: DomainRecord; status: string } | null>(null);
   const [detail, setDetail] = useState<DomainRecord | null>(null);
+  const [releaseRun, setReleaseRun] = useState<DomainRecord | null>(null);
   const { page, pageSize, pages, setPage, previous, next } = usePagination(meta.total);
   const canWrite = roleAtLeast(session?.role, 'operator');
   const canReview = roleAtLeast(session?.role, 'reviewer');
@@ -48,7 +51,8 @@ export function EntityPage({ config, useStore }: { config: EntityConfig; useStor
     const now = Date.now();
     await createRecord(config.path, { code: `${config.key.toUpperCase()}-${now.toString().slice(-6)}`, name: `新增${config.label}`,
       description: '通过前端工作台创建的业务记录', facility: '默认作业区', owner: session?.username || 'operator', category: '常规', riskLevel: 'medium',
-      metricValue: 2.4, metricUnit: 'ΔE', effectiveAt: new Date().toISOString(), evidence: '已完成创建前色彩检查', relatedCode: 'PR-001' });
+      metricValue: 2.4, metricUnit: 'ΔE', effectiveAt: new Date().toISOString(), evidence: '已完成创建前色彩检查', relatedCode: 'PR-001',
+      plannedQuantity: 1000 });
     setShowCreate(false);
   };
   const openDetail = async (item: DomainRecord) => {
@@ -63,12 +67,13 @@ export function EntityPage({ config, useStore }: { config: EntityConfig; useStor
     <section className="toolbar"><input aria-label="搜索" placeholder={`搜索${config.label}编码或名称`} value={search} onChange={(event) => setSearch(event.target.value)} /><UiButton onClick={() => { setPage(1); setSubmittedSearch(search); }}>查询</UiButton><button className="link-button" onClick={() => { setSearch(''); setSubmittedSearch(''); setPage(1); }}>重置</button></section>
     {error && <div className="alert" role="alert">{error}</div>}
     <section className="table-shell" aria-busy={loading}><table><thead><tr><th>编码</th><th>名称</th><th>状态</th><th>风险</th><th>责任人</th><th>指标</th><th>更新时间</th><th>操作</th></tr></thead><tbody>
-      {items.map((item) => { const target = nextPermittedStatus(config, item.status, canReview); return <tr key={item.id}><td><strong>{item.code}</strong></td><td><button className="record-link" onClick={() => void openDetail(item)}>{item.name}</button><small>{item.facility}</small></td><td>{config.key === 'printRun' ? <RunStateBadge state={item.status as RunState}/> : <StatusBadge status={item.status}/>} {config.key === 'releaseDecision' && <RunStateBadge state={decisionRunState(item.status)}/>}</td><td>{item.riskLevel}</td><td>{item.owner}</td><td>{item.metricValue} {item.metricUnit}</td><td>{formatDate(item.updatedAt)}</td><td>{canWrite && target ? <button className="table-action" onClick={() => setPending({ item, status: target })}>推进至 {target}</button> : <button className="table-action" onClick={() => void openDetail(item)}>查看详情</button>}</td></tr>; })}
+      {items.map((item) => { const target = nextPermittedStatus(config, item.status, canReview); const isReleasableRun = config.key === 'printRun' && item.status === 'proofing' && canReview; return <tr key={item.id}><td><strong>{item.code}</strong></td><td><button className="record-link" onClick={() => void openDetail(item)}>{item.name}</button><small>{item.facility}</small></td><td>{config.key === 'printRun' ? <RunStateBadge state={item.status as RunState}/> : <StatusBadge status={item.status}/>} {config.key === 'releaseDecision' && <RunStateBadge state={decisionRunState(item.status)}/>}{config.key === 'printRun' && item.plannedQuantity > 0 && <small>累计 {item.releasedQuantity} / {item.plannedQuantity} 份{item.status === 'proofing' ? `，剩余 ${item.plannedQuantity - item.releasedQuantity}` : ''}</small>}</td><td>{item.riskLevel}</td><td>{item.owner}</td><td>{item.metricValue} {item.metricUnit}</td><td>{formatDate(item.updatedAt)}</td><td>{isReleasableRun ? <button className="table-action" onClick={() => setReleaseRun(item)}>登记放行</button> : canWrite && target ? <button className="table-action" onClick={() => setPending({ item, status: target })}>推进至 {target}</button> : <button className="table-action" onClick={() => void openDetail(item)}>查看详情</button>}</td></tr>; })}
       {!items.length && !loading && <tr><td colSpan={8}><EmptyState title="没有匹配记录" detail="可清空搜索条件后重新查询" /></td></tr>}
     </tbody></table>{loading && <div className="loading">正在同步业务数据…</div>}</section>
     <footer className="pagination"><button onClick={previous} disabled={page <= 1}>上一页</button><span>第 {page} / {pages} 页</span><button onClick={next} disabled={page >= pages}>下一页</button></footer>
     <ConfirmDialog open={showCreate} title={`新增${config.label}`} onCancel={() => setShowCreate(false)} onConfirm={() => void createDemo()}><p>将创建一条包含完整责任人、风险和证据信息的演示记录。</p></ConfirmDialog>
     <ConfirmDialog open={Boolean(pending)} title="确认状态迁移" onCancel={() => setPending(null)} onConfirm={() => { if (pending) void transition(config.path, pending.item, pending.status).then(() => setPending(null)); }}><p>状态迁移会写入审计日志；色彩配置和放行决定同时生成不可变版本。</p><strong>{pending?.item.status} → {pending?.status}</strong></ConfirmDialog>
     <ConfirmDialog open={Boolean(detail)} title={`${detail?.code || ''} 记录详情`} onCancel={() => setDetail(null)} onConfirm={() => setDetail(null)}>{detail && <div className="detail-content"><p>{detail.description}</p><dl><div><dt>证据</dt><dd>{detail.evidence || '-'}</dd></div><div><dt>当前版本</dt><dd>v{detail.version}</dd></div></dl><ColorTable records={[detail]} title="记录色彩读数" />{detail.revisions?.length ? <div className="revision-list"><h3>版本链</h3>{detail.revisions.map((revision) => <article key={revision.id}><strong>v{revision.version} · {revision.status}</strong><span>{revision.actor} · {revision.reason}</span><code>{revision.requestId}</code></article>)}</div> : null}</div>}</ConfirmDialog>
+    {releaseRun && <RunReleaseDialog run={releaseRun} onClose={(changed) => { setReleaseRun(null); if (changed) void load(config.path, submittedSearch, page, pageSize); }} />}
   </main>;
 }

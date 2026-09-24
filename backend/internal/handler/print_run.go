@@ -23,6 +23,8 @@ func (h *PrintRunHandler) Register(group *gin.RouterGroup) {
 	resource.POST("", middleware.RequireMinimumRole("operator"), h.create)
 	resource.PUT("/:id", middleware.RequireMinimumRole("operator"), h.update)
 	resource.POST("/:id/transition", middleware.RequireMinimumRole("operator"), h.transition)
+	resource.GET("/:id/releases", h.listReleases)
+	resource.POST("/:id/releases", middleware.RequireMinimumRole("reviewer"), h.createRelease)
 	resource.DELETE("/:id", middleware.RequireRoles("admin"), h.remove)
 }
 
@@ -97,6 +99,37 @@ func (h *PrintRunHandler) transition(c *gin.Context) {
 		return
 	}
 	util.OK(c, item)
+}
+
+func (h *PrintRunHandler) listReleases(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListReleases(c.Request.Context(), id)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	util.OK(c, items)
+}
+
+func (h *PrintRunHandler) createRelease(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+	var input dto.CreateRunRelease
+	if err := c.ShouldBindJSON(&input); err != nil {
+		util.Fail(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.service.RecordRelease(c.Request.Context(), id, input, actorFromContext(c), roleFromContext(c), requestIDFromContext(c))
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	util.Created(c, result)
 }
 
 func (h *PrintRunHandler) remove(c *gin.Context) {

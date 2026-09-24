@@ -15,9 +15,23 @@ export interface DomainRecord {
   effectiveAt: string;
   evidence: string;
   relatedCode: string;
+  plannedQuantity: number;
+  releasedQuantity: number;
   createdAt: string;
   updatedAt: string;
   revisions?: RevisionRecord[];
+}
+
+export interface RunReleaseRecord {
+  id: number; printRunId: number; startNo: number; endNo: number; quantity: number;
+  pressUnit: string; actor: string; requestId: string; note: string; createdAt: string;
+}
+
+export interface RunReleaseResult {
+  release: RunReleaseRecord;
+  run: DomainRecord;
+  releasedQuantity: number;
+  remainingQuantity: number;
 }
 
 export interface RevisionRecord {

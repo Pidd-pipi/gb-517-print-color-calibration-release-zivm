@@ -18,6 +18,8 @@ type PrintRunService interface {
 	Create(context.Context, dto.CreatePrintRun, string, string) (model.PrintRun, error)
 	Update(context.Context, uint, dto.UpdatePrintRun, string, string) (model.PrintRun, error)
 	Transition(context.Context, uint, dto.TransitionRequest, string, string, string) (model.PrintRun, error)
+	RecordRelease(context.Context, uint, dto.CreateRunRelease, string, string, string) (dto.RunReleaseResult, error)
+	ListReleases(context.Context, uint) ([]model.RunRelease, error)
 	Delete(context.Context, uint, string, string) error
 	StatusCounts(context.Context) (map[string]int64, error)
 }
@@ -52,7 +54,8 @@ func (s *printRunService) Create(ctx context.Context, input dto.CreatePrintRun, 
 		Category: strings.TrimSpace(input.Category), RiskLevel: input.RiskLevel,
 		MetricValue: input.MetricValue, MetricUnit: strings.TrimSpace(input.MetricUnit),
 		EffectiveAt: input.EffectiveAt.UTC(), Evidence: strings.TrimSpace(input.Evidence),
-		RelatedCode: strings.ToUpper(strings.TrimSpace(input.RelatedCode)),
+		RelatedCode:     strings.ToUpper(strings.TrimSpace(input.RelatedCode)),
+		PlannedQuantity: input.PlannedQuantity,
 	}
 	if err := s.repository.CreateVersioned(ctx, &item, actor, requestID, "created colour configuration"); err != nil {
 		return model.PrintRun{}, fmt.Errorf("create 印刷批次: %w", err)
@@ -69,6 +72,9 @@ func (s *printRunService) Update(ctx context.Context, id uint, input dto.UpdateP
 	if err := validatePrintRunBusinessFields(current.Code, input.Name, input.Facility, input.Owner); err != nil {
 		return model.PrintRun{}, err
 	}
+	if input.PlannedQuantity < current.ReleasedQuantity {
+		return model.PrintRun{}, fmt.Errorf("%w: 计划份数不能低于已放行累计 %d", ErrInvalidInput, current.ReleasedQuantity)
+	}
 	current.Name = strings.TrimSpace(input.Name)
 	current.Description = strings.TrimSpace(input.Description)
 	current.Facility = strings.TrimSpace(input.Facility)
@@ -80,6 +86,7 @@ func (s *printRunService) Update(ctx context.Context, id uint, input dto.UpdateP
 	current.EffectiveAt = input.EffectiveAt.UTC()
 	current.Evidence = strings.TrimSpace(input.Evidence)
 	current.RelatedCode = strings.ToUpper(strings.TrimSpace(input.RelatedCode))
+	current.PlannedQuantity = input.PlannedQuantity
 	current.Version = input.ExpectedVersion + 1
 	current.UpdatedAt = time.Now().UTC()
 	if err := s.repository.UpdateVersioned(ctx, id, input.ExpectedVersion, &current, actor, requestID, "updated colour configuration"); err != nil {
@@ -115,6 +122,48 @@ func (s *printRunService) Transition(ctx context.Context, id uint, input dto.Tra
 }
 
 func canReview(role string) bool { return role == model.RoleReviewer || role == model.RoleAdmin }
+
+// RecordRelease registers one partial release pass for a run that is still in
+// proofing. The repository derives the interval and enforces the plan ceiling
+// and the no-overlap guarantee atomically, so a failed attempt never moves the
+// cumulative quantity.
+func (s *printRunService) RecordRelease(ctx context.Context, id uint, input dto.CreateRunRelease, actor, role, requestID string) (dto.RunReleaseResult, error) {
+	if !canReview(role) {
+		return dto.RunReleaseResult{}, ErrForbidden
+	}
+	pressUnit := strings.TrimSpace(input.PressUnit)
+	if input.Quantity < 1 || pressUnit == "" {
+		return dto.RunReleaseResult{}, ErrInvalidInput
+	}
+	release := model.RunRelease{
+		PrintRunID: id, Quantity: input.Quantity, PressUnit: pressUnit,
+		Note: strings.TrimSpace(input.Note), Actor: actor, RequestID: requestID,
+	}
+	reason := fmt.Sprintf("分批放行 %d 份 @ %s", input.Quantity, pressUnit)
+	run, err := s.repository.RecordRelease(ctx, &release, reason)
+	if err != nil {
+		return dto.RunReleaseResult{}, err
+	}
+	detail := fmt.Sprintf("区间 %d-%d，累计 %d/%d", release.StartNo, release.EndNo, run.ReleasedQuantity, run.PlannedQuantity)
+	if run.Status == string(constants.RunStateReleased) {
+		detail += "，已满数放行"
+	}
+	if err := s.security.Audit(ctx, actor, requestID, "release", "PrintRun", id, string(constants.RunStateProofing), run.Status, detail); err != nil {
+		return dto.RunReleaseResult{}, fmt.Errorf("persist release audit: %w", err)
+	}
+	return dto.RunReleaseResult{
+		Release: release, Run: run,
+		ReleasedQuantity:  run.ReleasedQuantity,
+		RemainingQuantity: run.PlannedQuantity - run.ReleasedQuantity,
+	}, nil
+}
+
+func (s *printRunService) ListReleases(ctx context.Context, id uint) ([]model.RunRelease, error) {
+	if _, err := s.repository.Get(ctx, id); err != nil {
+		return nil, err
+	}
+	return s.repository.ListReleases(ctx, id)
+}
 
 func (s *printRunService) Delete(ctx context.Context, id uint, actor, requestID string) error {
 	current, err := s.repository.Get(ctx, id)

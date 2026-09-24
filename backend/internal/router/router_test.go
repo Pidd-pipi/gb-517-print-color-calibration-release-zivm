@@ -139,6 +139,7 @@ func recordPayload(code, name string) map[string]any {
 		"facility": "测试印刷区", "owner": "operator", "category": "校准",
 		"riskLevel": "medium", "metricValue": 2.1, "metricUnit": "dE",
 		"effectiveAt": time.Now().UTC().Format(time.RFC3339), "evidence": "spectrophotometer evidence", "relatedCode": "PR-001",
+		"plannedQuantity": 100,
 	}
 }
 

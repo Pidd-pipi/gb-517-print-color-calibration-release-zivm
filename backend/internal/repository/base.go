@@ -111,3 +111,15 @@ func normalizePage(page, pageSize int) (int, int) {
 	}
 	return page, pageSize
 }
+
+// isUniqueViolation recognises duplicate-key errors across the supported
+// drivers (sqlite, MySQL, PostgreSQL) without driver-specific imports.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint") ||
+		strings.Contains(message, "duplicate entry") ||
+		strings.Contains(message, "duplicate key")
+}
